@@ -1,0 +1,15 @@
+# Entorno virtual local
+venv/
+.venv/
+
+# Datos crudos e intermedios (Evita subir megabytes a GitHub)
+data/raw/
+data/interim/
+
+# Archivos de cache de Python
+__pycache__/
+*.pyc
+
+# Sistemas operativos
+.DS_Store
+Thumbs.db
