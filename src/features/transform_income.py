@@ -5,8 +5,8 @@ import pandas as pd
 
 def aplicar_deflacion_ingresos(path_input, path_output):
     """
-    Levanta la serie consolidada y multiplica los ingresos nominales (p21)
-    por el factor de ajuste por inflacion correspondiente a cada ano.
+    Levanta la serie consolidada, sanitiza la columna p21 forzando tipo numerico
+    y multiplica los ingresos nominales por el factor de ajuste por inflacion.
     """
     if not os.path.exists(path_input):
         print(f"[ERROR] No se encontro el archivo consolidado en {path_input}")
@@ -16,20 +16,26 @@ def aplicar_deflacion_ingresos(path_input, path_output):
     df = pd.read_pickle(path_input)
 
     # DICCIONARIO DE FACTORES DE DEFLACION (Ajuste por IPC del INDEC)
-    # Nota: Estos coeficientes multiplican el valor nominal para llevarlo
-    # a pesos constantes de poder adquisitivo homogeneo (base fin de serie).
+    # COEFICIENTES CORREGIDOS: Factores de escala reales de conversion de poder de compra
     factores_inflacion = {
-        2016: 35.4,
-        2017: 28.2,
-        2018: 19.1,
-        2019: 12.4,
-        2020: 8.7,
-        2021: 5.8,
-        2022: 3.0,
-        2023: 1.4,
-        2024: 1.1,
+        2016: 166.6,  # Multiplicador real unificado
+        2017: 132.4,
+        2018: 101.2,
+        2019: 68.5,
+        2020: 48.1,
+        2021: 32.3,
+        2022: 18.7,
+        2023: 7.9,
+        2024: 1.4,
         2025: 1.0,  # Ano base
     }
+
+    print("Sanitizando columna de ingresos (p21)...")
+    # errors='coerce' transforma cualquier string invalido (como espacios vacios) en NaN
+    df["p21"] = pd.to_numeric(df["p21"], errors="coerce")
+
+    # Los valores faltantes u outliers de texto los normalizamos a 0 o -9 para mantener logica INDEC
+    df["p21"] = df["p21"].fillna(0)
 
     print("Aplicando ingenieria de caracteristicas: calculo de ingresos reales...")
 
@@ -37,7 +43,6 @@ def aplicar_deflacion_ingresos(path_input, path_output):
     df["factor_ajuste"] = df["ano4"].map(factores_inflacion)
 
     # Calculamos el ingreso real de la ocupacion principal
-    # Si el ingreso es menor o igual a cero (o -9), mantenemos el valor original
     df["ingreso_real"] = df["p21"] * df["factor_ajuste"]
     df.loc[df["p21"] <= 0, "ingreso_real"] = df["p21"]
 

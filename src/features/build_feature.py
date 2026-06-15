@@ -40,6 +40,8 @@ def consolidar_serie_individual(dir_interim, codigos_aglomerados):
             "nivel_ed",  # Nivel educativo
             "estado",  # Condicion de actividad
             "cat_ocup",  # Categoria ocupacional
+            "pp04b_cod",  # Rama de actividad (Exigido en enunciado)
+            "pp04d_cod",  # Codigo de ocupacion (Exigido en enunciado)
             "p21",  # Ingreso ocupacion principal
             "pondera",  # Factor de expansion
         ]

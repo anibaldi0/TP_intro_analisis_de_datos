@@ -1,0 +1,34 @@
+=========================================================
+      REPORTE DE EVOLUCION SOCIOECONOMICA (2016-2025)     
+=========================================================
+
+1. MERCADO LABORAL (EMPLEO Y DESOCUPACION)
+---------------------------------------------------------
+* En el Gran Buenos Aires (GBA):
+  - Al inicio del periodo (2016), la desocupacion afectaba al 10.4% de la poblacion activa.
+  - Al cierre del periodo (2025), la desocupacion se ubico en el 9.1%.
+  - En terminos netos, el desempleo bajo un 1.2% a lo largo de la decada.
+
+* En el Gran Mendoza:
+  - Al inicio del periodo (2016), la desocupacion afectaba al 4.6% de la poblacion activa.
+  - Al cierre del periodo (2025), la desocupacion se ubico en el 5.2%.
+  - En terminos netos, el desempleo subio un 0.6% a lo largo de la decada.
+
+2. EVOLUCION DEL PODER ADQUISITIVO (INGRESOS REALES)
+---------------------------------------------------------
+Nota: Los ingresos han sido corregidos por inflacion y estan expresados
+en pesos constantes con poder de compra homogeneo de 2025.
+
+* Analisis de ingresos en Gran Buenos Aires (GBA):
+  - La mitad de los trabajadores ganaba menos de $1,449,093 (pesos de 2025) en 2016.
+  - Para el ano 2025, la mitad de los trabajadores ganaba menos de $750,000.
+  - Esto representa una perdida del 48.2% del poder de compra real de la gente.
+
+* Analisis de ingresos en Gran Mendoza:
+  - La mitad de los trabajadores ganaba menos de $1,666,000 (pesos de 2025) en 2016.
+  - Para el ano 2025, la mitad de los trabajadores ganaba menos de $800,000.
+  - Esto representa una perdida del 52.0% del poder de compra real de la gente.
+
+=========================================================
+                    FIN DEL REPORTE                      
+=========================================================

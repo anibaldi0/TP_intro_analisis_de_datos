@@ -41,7 +41,8 @@ def extraer_individuales_desde_cero(dir_raw, dir_interim):
                 target_txt = [
                     f
                     for f in contenido
-                    if "individual" in f.lower() and f.endswith(".txt")
+                    if ("individual" in f.lower() or "personas" in f.lower())
+                    and f.endswith(".txt")
                 ]
 
                 if target_txt:
