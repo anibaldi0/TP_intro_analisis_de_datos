@@ -39,7 +39,6 @@ def entrenar_evaluar_regresion(X, y):
     """
     from sklearn.linear_model import LinearRegression
 
-    # CORRECCION: Se cambio 'test_test_split' por el parametro nativo 'test_size'
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
@@ -70,14 +69,62 @@ def entrenar_evaluar_regresion(X, y):
     return model
 
 
+def imputar_no_respuesta(path_final, model):
+    """
+    Identifica los registros sin declaracion de ingresos, predice su valor
+    mediante el modelo entrenado y los guarda de manera persistente en el dataset.
+    """
+    df = pd.read_pickle(path_final)
+
+    # Creamos una copia de control para no pisar el ingreso original reportado
+    df["ingreso_imputado"] = df["ingreso_real"]
+
+    # Identificamos las filas que corresponden a la "No Respuesta" (valores <= 0 o vacios)
+    filas_no_respuesta = df["ingreso_real"] <= 0
+
+    if filas_no_respuesta.sum() == 0:
+        print("[ALERTA] No se detectaron registros sin respuesta para imputar.")
+        return df
+
+    print(
+        f"\n-> Se detectaron {filas_no_respuesta.sum()} registros con No Respuesta."
+    )
+    print("Generando predicciones de ingresos basadas en variables predictoras...")
+
+    # Extraemos y codificamos las dummies para el set completo bajo las mismas columnas del modelo
+    predictores = ["ch04", "ch06", "nivel_ed", "aglomerado"]
+    X_completo = pd.get_dummies(
+        df[predictores], columns=["ch04", "nivel_ed", "aglomerado"], drop_first=True
+    )
+
+    # Filtramos la matriz de diseño unicamente para las filas vacias
+    X_faltantes = X_completo[filas_no_respuesta]
+
+    # El modelo predice en logaritmos; aplicamos np.exp() para pasarlo a pesos reales
+    predicciones_log = model.predict(X_faltantes)
+    predicciones_pesos = np.exp(predicciones_log)
+
+    # Imputamos los valores estimados unicamente en los baches correspondientes
+    df.loc[filas_no_respuesta, "ingreso_imputado"] = predicciones_pesos
+
+    return df
+
+
 if __name__ == "__main__":
     final_input = "data/processed/serie_individual_final.pkl"
 
     if not os.path.exists(final_input):
-        print(f"[ERROR] No se encontro el archivo final en {final_input}")
+        print(f"[ERROR] No se encontro el archivo final en {path_input}")
     else:
         print("Iniciando preparacion de matrices para modelado estadistico...")
         X, y = preparar_datos_modelado(final_input)
 
         print("Entrenando modelo de regresion lineal multiple...")
         modelo_ajustado = entrenar_evaluar_regresion(X, y)
+
+        print("Iniciando fase final de Imputacion de la No Respuesta...")
+        df_imputado = imputar_no_respuesta(final_input, modelo_ajustado)
+
+        # Sobreescribimos de forma segura el pickle definitivo incorporando la columna nueva
+        df_imputado.to_pickle(final_input)
+        print(f"-> Proceso completado con éxito. Columna 'ingreso_imputado' persistida.")
