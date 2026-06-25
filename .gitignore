@@ -13,3 +13,5 @@ __pycache__/
 # Sistemas operativos
 .DS_Store
 Thumbs.db
+
+*.pkl
