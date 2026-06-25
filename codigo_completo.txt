@@ -1,0 +1,779 @@
+============src/analysis/income_analysis.py============
+# src/analysis/income_analysis.py
+import os
+import pandas as pd
+
+def calcular_ingresos_medianos(input_pickle, output_pickle):
+    df = pd.read_pickle(input_pickle)
+
+    # Usar PONDIIO si existe; si no, PONDERA
+    pond_col = "PONDIIO" if "PONDIIO" in df.columns else "PONDERA"
+
+    # Solo ocupados con ingreso positivo
+    df_ocup = df[(df["ESTADO"] == 1) & (df["ingreso_real"] > 0)].copy()
+
+    def weighted_median(group):
+        sorted_group = group.sort_values("ingreso_real")
+        cumsum = sorted_group[pond_col].cumsum()
+        total = sorted_group[pond_col].sum()
+        idx = (cumsum >= total/2).idxmax()
+        return sorted_group.loc[idx, "ingreso_real"]
+
+    medianas = df_ocup.groupby(["ANO4", "TRIMESTRE", "AGLOMERADO"]).apply(weighted_median).reset_index()
+    medianas.columns = ["ANO4", "TRIMESTRE", "AGLOMERADO", "ingreso_mediano_pond"]
+    medianas["periodo"] = medianas["ANO4"].astype(str) + "-T" + medianas["TRIMESTRE"].astype(str)
+
+    medianas.to_pickle(output_pickle)
+    print(f"Medianas de ingreso guardadas en {output_pickle}")
+    return medianas
+
+if __name__ == "__main__":
+    calcular_ingresos_medianos(
+        "data/processed/serie_individual_final.pkl",
+        "data/processed/evolucion_ingresos.pkl"
+    )============src/analysis/stats_analysis.py============
+# src/analysis/stats_analysis.py
+import os
+import pandas as pd
+
+def calcular_tasas_laborales(input_pickle, output_pickle):
+    df = pd.read_pickle(input_pickle)
+
+    # Asegurar tipos
+    df["PONDERA"] = pd.to_numeric(df["PONDERA"], errors="coerce").fillna(0)
+    df["ESTADO"] = pd.to_numeric(df["ESTADO"], errors="coerce").fillna(0).astype(int)
+
+    # Crear columnas ponderadas
+    df["pob_total"] = df["PONDERA"]
+    df["pob_activa"] = df.apply(lambda r: r["PONDERA"] if r["ESTADO"] in [1, 2] else 0, axis=1)
+    df["pob_ocupada"] = df.apply(lambda r: r["PONDERA"] if r["ESTADO"] == 1 else 0, axis=1)
+    df["pob_desocupada"] = df.apply(lambda r: r["PONDERA"] if r["ESTADO"] == 2 else 0, axis=1)
+
+    # Agrupar por año, trimestre y aglomerado
+    grouped = df.groupby(["ANO4", "TRIMESTRE", "AGLOMERADO"], as_index=False)[
+        ["pob_total", "pob_activa", "pob_ocupada", "pob_desocupada"]
+    ].sum()
+
+    # Calcular tasas
+    grouped["tasa_actividad"] = (grouped["pob_activa"] / grouped["pob_total"]) * 100
+    grouped["tasa_empleo"] = (grouped["pob_ocupada"] / grouped["pob_total"]) * 100
+    grouped["tasa_desocupacion"] = (grouped["pob_desocupada"] / grouped["pob_activa"]) * 100
+
+    # Crear período como string
+    grouped["periodo"] = grouped["ANO4"].astype(str) + "-T" + grouped["TRIMESTRE"].astype(str)
+
+    grouped.to_pickle(output_pickle)
+    print(f"Tasas laborales guardadas en {output_pickle}")
+    return grouped
+
+if __name__ == "__main__":
+    calcular_tasas_laborales(
+        "data/processed/serie_individual_final.pkl",
+        "data/processed/tasas_mercado_trabajo.pkl"
+    )============src/analysis/__init__.py============
+============src/check_data.py============
+import pandas as pd
+import numpy as np
+
+df = pd.read_pickle("data/processed/serie_individual_final.pkl")
+
+# Filtrar ocupados con horas > 0
+df_modelo = df[(df["ESTADO"] == 1) & (df["horas_trabajadas"] > 0)].copy()
+df_con_ingreso = df_modelo[df_modelo["ingreso_real"] > 0].copy()
+
+print("=== Estadisticas de ingreso_real ===")
+print(df_con_ingreso["ingreso_real"].describe())
+
+print("\n=== Rango de valores ===")
+print(f"Min: {df_con_ingreso['ingreso_real'].min():.2f}")
+print(f"Max: {df_con_ingreso['ingreso_real'].max():.2f}")
+print(f"Media: {df_con_ingreso['ingreso_real'].mean():.2f}")
+
+# Ver distribucion de log
+print("\n=== Estadisticas de log(ingreso_real) ===")
+log_ingreso = np.log(df_con_ingreso["ingreso_real"])
+print(log_ingreso.describe())
+print(f"Rango de log: {log_ingreso.min():.2f} a {log_ingreso.max():.2f}")============src/check_factores.py============
+# src/check_factores.py
+import pickle
+
+with open("data/processed/factores_inflacion_trim.pkl", "rb") as f:
+    factores = pickle.load(f)
+
+print("Factores de deflacion (IPC_periodo / IPC_base):")
+print("Base = 2026-T2 (IPC_GBA ≈ 11465.55, IPC_Cuyo ≈ 11630.60)")
+print("-" * 60)
+print(f"{'Año-T':<10} {'GBA':<12} {'Cuyo':<12}")
+print("-" * 60)
+for (ano, trim), v in sorted(factores.items()):
+    print(f"{ano}-T{trim:<2}   {v['gba']:.6f}   {v['cuyo']:.6f}")============src/data/build_dataset.py============
+# src/data/build_dataset.py
+import os
+import zipfile
+import pandas as pd
+
+def build_dataset(raw_dir, processed_dir, aglomerados=[33, 5]):
+    """
+    Lee todos los archivos .zip de raw_dir, extrae los microdatos individuales,
+    filtra por aglomerados y guarda un único DataFrame en processed_dir.
+    """
+    os.makedirs(processed_dir, exist_ok=True)
+    registros = []
+
+    # Columnas requeridas (incluyendo las que se usarán en el modelo)
+    columnas_necesarias = [
+        "CODUSU", "NRO_HOGAR", "COMPONENTE", "ANO4", "TRIMESTRE",
+        "AGLOMERADO", "CH04", "CH06", "NIVEL_ED", "ESTADO",
+        "CAT_OCUP", "PONDERA", "P21", "PP03J", "PP04B_COD", "PP04D_COD"
+    ]
+
+    archivos_zip = [f for f in os.listdir(raw_dir) if f.endswith(".zip")]
+    print(f"Encontrados {len(archivos_zip)} archivos .zip")
+
+    for zip_name in archivos_zip:
+        zip_path = os.path.join(raw_dir, zip_name)
+        with zipfile.ZipFile(zip_path, "r") as z:
+            for inner_file in z.namelist():
+                # Buscar archivo de individuos (suele contener "individual" o "ind")
+                if "individual" in inner_file.lower() or "ind" in inner_file.lower():
+                    print(f"Procesando {zip_name} -> {inner_file}")
+                    with z.open(inner_file) as f:
+                        df = pd.read_csv(f, sep=";", low_memory=False,
+                                         usecols=lambda c: c.upper() in columnas_necesarias)
+                        # Normalizar nombres
+                        df.columns = df.columns.str.upper()
+                        # Filtrar aglomerados
+                        df["AGLOMERADO"] = pd.to_numeric(df["AGLOMERADO"], errors="coerce")
+                        df = df[df["AGLOMERADO"].isin(aglomerados)].copy()
+                        registros.append(df)
+
+    if not registros:
+        raise ValueError("No se encontraron datos para los aglomerados especificados.")
+
+    df_consolidado = pd.concat(registros, ignore_index=True)
+    # Guardar
+    output_path = os.path.join(processed_dir, "serie_individual_raw.pkl")
+    df_consolidado.to_pickle(output_path)
+    print(f"Dataset guardado en {output_path}")
+    print(f"Dimensiones: {df_consolidado.shape}")
+    return df_consolidado
+
+if __name__ == "__main__":
+    build_dataset("data/raw", "data/processed")============src/data/extract_data.py============
+# backend/app/data/extract_data.py
+"""Modulo de extraccion y consolidacion de microdatos de la EPH."""
+import os
+import zipfile
+import pandas as pd
+
+def extraer_y_consolidar_eph(raw_dir, processed_dir):
+    """Extrae y consolida microdatos filtrando aglomerados objetivo."""
+    os.makedirs(processed_dir, exist_ok=True)
+    registros = []
+    aglomerados_objetivo = [10, 32]
+    columnas_core = ["CODUSU", "ANO4", "TRIMESTRE", "AGLOMERADO", "CH04", "CH06", 
+                     "NIVEL_ED", "ESTADO", "CAT_OCUP", "PONDERA", "P21", "PP03J", 
+                     "PP04B_COD", "PP04D_COD"]
+
+    for archivo in os.listdir(raw_dir):
+        if archivo.endswith(".zip"):
+            with zipfile.ZipFile(os.path.join(raw_dir, archivo), "r") as z:
+                for nombre in z.namelist():
+                    if "individual" in nombre.lower():
+                        with z.open(nombre) as f:
+                            df = pd.read_csv(f, sep=";", low_memory=False)
+                            df.columns = [c.upper() for c in df.columns]
+                            df = df[df["AGLOMERADO"].isin(aglomerados_objetivo)]
+                            registros.append(df[columnas_core.intersection(df.columns)])
+    
+    df_final = pd.concat(registros, ignore_index=True)
+    df_final.to_pickle(os.path.join(processed_dir, "serie_consolidada.pkl"))
+    print("Extraccion completada con exito.")
+
+if __name__ == "__main__":
+    extraer_y_consolidar_eph("data/raw", "data/processed")============src/data/__init__.py============
+============src/debug_ipc.py============
+import pandas as pd
+
+df = pd.read_excel("data/external/sh_ipc_06_26.xls", sheet_name="Índices IPC Cobertura Nacional", header=None)
+print(df.iloc[0:30, 0:3].to_string())============src/features/build_features.py============
+# src/features/build_features.py
+import os
+import pandas as pd
+
+def build_features(raw_pickle, output_pickle):
+    """
+    Carga el dataset crudo, aplica deflación (pesos de 2025),
+    y agrega variables categóricas y ponderadores.
+    """
+    df = pd.read_pickle(raw_pickle)
+    df.columns = df.columns.str.upper()
+
+    # --- DEFLACIÓN DE INGRESOS (pesos constantes de 2025) ---
+    factores_inflacion = {
+        2016: 107.15,
+        2017: 85.82,
+        2018: 58.13,
+        2019: 37.80,
+        2020: 27.76,
+        2021: 18.39,
+        2022: 9.44,
+        2023: 3.80,
+        2024: 1.39,
+        2025: 1.00,
+    }
+
+    df["ANO4"] = df["ANO4"].astype(int)
+    df["P21"] = pd.to_numeric(df["P21"], errors="coerce").fillna(0)
+    df["factor_deflacion"] = df["ANO4"].map(factores_inflacion)
+    df["ingreso_real"] = df["P21"] * df["factor_deflacion"]
+    df.loc[df["P21"] <= 0, "ingreso_real"] = 0
+
+    # --- PONDERADORES ---
+    # Asegurar que PONDIIO exista; si no, usar PONDERA como fallback
+    if "PONDIIO" not in df.columns:
+        df["PONDIIO"] = df["PONDERA"]
+        print("PONDIIO no encontrado. Se usará PONDERA para ingresos.")
+    else:
+        df["PONDIIO"] = pd.to_numeric(df["PONDIIO"], errors="coerce").fillna(df["PONDERA"])
+
+    df["PONDERA"] = pd.to_numeric(df["PONDERA"], errors="coerce").fillna(0)
+
+    # --- VARIABLES CATEGÓRICAS ---
+    df["sexo"] = df["CH04"].map({1: "Varón", 2: "Mujer"})
+
+    mapa_edu = {
+        1: "Sin instrucción",
+        2: "Primaria incompleta",
+        3: "Primaria completa",
+        4: "Secundaria incompleta",
+        5: "Secundaria completa",
+        6: "Superior incompleta",
+        7: "Superior completa"
+    }
+    df["nivel_educativo"] = df["NIVEL_ED"].map(mapa_edu).fillna("Sin instrucción")
+
+    df["horas_trabajadas"] = pd.to_numeric(df["PP03J"], errors="coerce").fillna(0)
+
+    def sector_from_cod(cod):
+        if cod < 10:
+            return "Primario"
+        elif cod < 46:
+            return "Secundario"
+        else:
+            return "Terciario"
+    df["sector_actividad"] = df["PP04B_COD"].apply(sector_from_cod)
+
+    def calif_from_cod(cod):
+        if cod in [1, 2, 3]:
+            return "Profesional"
+        elif cod in [4, 5, 6]:
+            return "Técnico"
+        else:
+            return "Operario"
+    df["calificacion_tarea"] = df["PP04D_COD"].apply(calif_from_cod)
+
+    # --- NUEVAS VARIABLES (como el Trabajo 2) ---
+    # Categoría ocupacional (CAT_OCUP)
+    mapa_cat = {
+        1: "Patrón/Empleador",
+        2: "Cuenta propia",
+        3: "Asalariado",
+        4: "Trabajador familiar"
+    }
+    df["categoria_ocupacional"] = df["CAT_OCUP"].map(mapa_cat).fillna("Asalariado")
+
+    # Registro del empleo (PP07H: 1 = tiene descuento jubilatorio, 2 = no)
+    if "PP07H" in df.columns:
+        df["registro"] = df["PP07H"].map({1: "Registrado", 2: "No registrado"}).fillna("No registrado")
+    else:
+        df["registro"] = "No registrado"  # fallback
+
+    # Guardar
+    df.to_pickle(output_pickle)
+    print(f"Dataset final guardado en {output_pickle}")
+    print(f"Dimensiones: {df.shape}")
+    return df
+
+if __name__ == "__main__":
+    build_features(
+        "data/processed/serie_individual_raw.pkl",
+        "data/processed/serie_individual_final.pkl"
+    )============src/features/inspect_data.py============
+# src/features/inspect_data.py
+import os
+import pandas as pd
+
+
+def inspeccionar_dataset(path_pickle):
+    """
+    Levanta el DataFrame consolidado final y muestra su estructura,
+    las primeras filas y estadisticas de control de los ingresos reales.
+    """
+    if not os.path.exists(path_pickle):
+        print(f"[ERROR] No se encontro el archivo en {path_pickle}")
+        return
+
+    # Levantamos el DataFrame desde el archivo binario pickle
+    df = pd.read_pickle(path_pickle)
+
+    print("\n================ INFO GENERAL DEL DATAFRAME ================")
+    print(f"Cantidad total de registros (filas): {df.shape[0]}")
+    print(f"Cantidad de variables (columnas): {df.shape[1]}")
+    print("\nColumnas presentes:")
+    print(list(df.columns))
+    print("=============================================================")
+
+    print("\n================ PRIMERAS 5 FILAS ORDENADAS ================")
+    # pd.set_option ayuda a que no se corte el texto en la consola de Git Bash
+    pd.set_option("display.max_columns", None)
+    pd.set_option("display.width", 1000)
+    print(df.head())
+    print("=============================================================")
+
+    print("\n========== CONTROL DE INGRESOS REALES POR AGLOMERADO ==========")
+    # Filtramos los que si declararon ingresos para ver estadisticas reales
+    df_con_ingreso = df[df["ingreso_real"] > 0]
+    resumen = (
+        df_con_ingreso.groupby("aglomerado")["ingreso_real"]
+        .describe()
+        .round(2)
+    )
+    print(resumen)
+    print("=============================================================")
+
+
+if __name__ == "__main__":
+    archivo_final = "data/processed/serie_individual_final.pkl"
+    inspeccionar_dataset(archivo_final)
+============src/features/__init__.py============
+============src/models/train_model.py============
+# src/models/train_model.py
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import scipy.stats as stats
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
+
+def entrenar_imputar_ingresos(input_pickle, output_pickle, output_figures="reports/figures"):
+    os.makedirs(output_figures, exist_ok=True)
+    df = pd.read_pickle(input_pickle)
+
+    # Usar PONDIIO si existe, sino PONDERA
+    pond_col = "PONDIIO" if "PONDIIO" in df.columns else "PONDERA"
+
+    # Solo ocupados con horas trabajadas > 0
+    df_modelo = df[(df["ESTADO"] == 1) & (df["horas_trabajadas"] > 0)].copy()
+
+    # Separar con y sin ingreso
+    df_con_ingreso = df_modelo[df_modelo["ingreso_real"] > 0].copy()
+    df_sin_ingreso = df_modelo[df_modelo["ingreso_real"] <= 0].copy()
+
+    if len(df_con_ingreso) < 100:
+        raise ValueError("No hay suficientes casos con ingreso para entrenar.")
+
+    # Crear variables predictoras
+    df_con_ingreso["edad"] = pd.to_numeric(df_con_ingreso["CH06"], errors="coerce").fillna(0)
+    df_con_ingreso["edad_cuadrado"] = df_con_ingreso["edad"] ** 2
+
+    # Seleccion de variables
+    X = df_con_ingreso[[
+        "horas_trabajadas",
+        "sexo",
+        "nivel_educativo",
+        "sector_actividad",
+        "calificacion_tarea",
+        "categoria_ocupacional",
+        "registro",
+        "AGLOMERADO",
+        "ANO4",
+        "TRIMESTRE",
+        "edad",
+        "edad_cuadrado"
+    ]].copy()
+
+    X = pd.get_dummies(X, drop_first=True)
+    y = np.log(df_con_ingreso["ingreso_real"])
+
+    # Division entrenamiento/prueba
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # Modelo
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    # Metricas
+    r2 = r2_score(y_test, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+
+    print("="*60)
+    print("EVALUACION DEL MODELO DE IMPUTACION")
+    print("="*60)
+    print(f"R cuadrado: {r2:.4f}")
+    print(f"RMSE (log): {rmse:.4f}")
+    print("\nCoeficientes (interpretacion en log):")
+    for col, coef in zip(X.columns, model.coef_):
+        print(f"  {col}: {coef:.4f}")
+
+    # Graficos de diagnostico
+    plt.figure(figsize=(12, 5))
+
+    plt.subplot(1, 3, 1)
+    plt.scatter(y_test, y_pred, alpha=0.3, s=10)
+    min_val = min(y_test.min(), y_pred.min())
+    max_val = max(y_test.max(), y_pred.max())
+    plt.plot([min_val, max_val], [min_val, max_val], 'r--')
+    plt.xlabel('Observado (log)')
+    plt.ylabel('Predicho (log)')
+    plt.title(f'Observados vs Predichos (R2 = {r2:.3f})')
+
+    residuos = y_test - y_pred
+    plt.subplot(1, 3, 2)
+    plt.scatter(y_pred, residuos, alpha=0.3, s=10)
+    plt.axhline(y=0, color='r', linestyle='--')
+    plt.xlabel('Predicho (log)')
+    plt.ylabel('Residuo (log)')
+    plt.title('Residuos vs Predichos')
+
+    plt.subplot(1, 3, 3)
+    stats.probplot(residuos, dist="norm", plot=plt)
+    plt.title('Q-Q plot de residuos')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_figures, 'diagnostico_regresion.png'), dpi=300)
+    plt.close()
+    print(f"Grafico de diagnostico guardado en {output_figures}/diagnostico_regresion.png")
+
+    # Imputacion para casos sin ingreso
+    if len(df_sin_ingreso) > 0:
+        df_sin_ingreso["edad"] = pd.to_numeric(df_sin_ingreso["CH06"], errors="coerce").fillna(0)
+        df_sin_ingreso["edad_cuadrado"] = df_sin_ingreso["edad"] ** 2
+
+        X_sin = df_sin_ingreso[[
+            "horas_trabajadas",
+            "sexo",
+            "nivel_educativo",
+            "sector_actividad",
+            "calificacion_tarea",
+            "categoria_ocupacional",
+            "registro",
+            "AGLOMERADO",
+            "ANO4",
+            "TRIMESTRE",
+            "edad",
+            "edad_cuadrado"
+        ]].copy()
+
+        X_sin = pd.get_dummies(X_sin, drop_first=True)
+        X_sin = X_sin.reindex(columns=X.columns, fill_value=0)
+
+        pred_log = model.predict(X_sin)
+        df_sin_ingreso["ingreso_imputado"] = np.exp(pred_log)
+
+        # Unir conjuntos
+        df_con_ingreso["ingreso_final"] = df_con_ingreso["ingreso_real"]
+        df_sin_ingreso["ingreso_final"] = df_sin_ingreso["ingreso_imputado"]
+        df_final = pd.concat([df_con_ingreso, df_sin_ingreso], ignore_index=True)
+
+        # Validacion con PONDIIO: mediana ponderada
+        if pond_col in df_final.columns:
+            df_valid = df_final[df_final["ingreso_final"] > 0].copy()
+            sorted_valid = df_valid.sort_values("ingreso_final")
+            cumsum = sorted_valid[pond_col].cumsum()
+            total = sorted_valid[pond_col].sum()
+            idx = (cumsum >= total/2).idxmax()
+            mediana_ponderada = sorted_valid.loc[idx, "ingreso_final"]
+            print(f"\nMediana ponderada con {pond_col}: ${mediana_ponderada:,.0f}".replace(",", "."))
+        else:
+            print("\nNo se encontro PONDIIO para validacion.")
+
+        df_final.to_pickle(output_pickle)
+        print(f"Imputacion completada. Guardado en {output_pickle}")
+    else:
+        print("No hay casos sin ingreso para imputar.")
+
+    # Guardar coeficientes
+    coef_df = pd.DataFrame({'variable': X.columns, 'coeficiente': model.coef_})
+    coef_df.to_csv(os.path.join(output_figures, 'coeficientes_modelo.csv'), index=False)
+
+if __name__ == "__main__":
+    entrenar_imputar_ingresos(
+        "data/processed/serie_individual_final.pkl",
+        "data/processed/serie_individual_imputada.pkl"
+    )============src/models/__init__.py============
+============src/report/report_analysis.py============
+# src/report/report_analysis.py
+import os
+import pandas as pd
+
+def generar_reporte(tasas_pkl, ingresos_pkl, output_txt):
+    df_tasas = pd.read_pickle(tasas_pkl)
+    df_ingresos = pd.read_pickle(ingresos_pkl)
+
+    # Encontrar primer y último período
+    primer_periodo = df_tasas["periodo"].min()
+    ultimo_periodo = df_tasas["periodo"].max()
+
+    mapa_aglom = {33: "Gran Buenos Aires (GBA)", 5: "Gran Mendoza"}
+
+    with open(output_txt, "w", encoding="utf-8") as f:
+        f.write("="*60 + "\n")
+        f.write("      REPORTE DE EVOLUCIÓN SOCIOECONÓMICA (2016-2025)\n")
+        f.write("="*60 + "\n\n")
+
+        # --- Tasas ---
+        f.write("1. MERCADO LABORAL\n")
+        f.write("-"*60 + "\n")
+        for aglom_id, aglom_nom in mapa_aglom.items():
+            f.write(f"* {aglom_nom}:\n")
+            for col, nombre in [("tasa_actividad", "Actividad"),
+                                ("tasa_empleo", "Empleo"),
+                                ("tasa_desocupacion", "Desocupación")]:
+                val_ini = df_tasas[(df_tasas["periodo"] == primer_periodo) & (df_tasas["AGLOMERADO"] == aglom_id)][col].mean()
+                val_fin = df_tasas[(df_tasas["periodo"] == ultimo_periodo) & (df_tasas["AGLOMERADO"] == aglom_id)][col].mean()
+                diff = val_fin - val_ini
+                direccion = "subió" if diff > 0 else "bajó"
+                f.write(f"  - {nombre}: {val_ini:.1f}% → {val_fin:.1f}% ({direccion} {abs(diff):.1f} pp)\n")
+            f.write("\n")
+
+        # --- Ingresos ---
+        f.write("2. EVOLUCIÓN DEL INGRESO MEDIANO (PESOS CONSTANTES)\n")
+        f.write("-"*60 + "\n")
+        f.write("(Ingreso mediano ponderado, ajustado por inflación)\n\n")
+        for aglom_id, aglom_nom in mapa_aglom.items():
+            ing_ini = df_ingresos[(df_ingresos["periodo"] == primer_periodo) & (df_ingresos["AGLOMERADO"] == aglom_id)]["ingreso_mediano_pond"].mean()
+            ing_fin = df_ingresos[(df_ingresos["periodo"] == ultimo_periodo) & (df_ingresos["AGLOMERADO"] == aglom_id)]["ingreso_mediano_pond"].mean()
+            variacion = ((ing_fin - ing_ini) / ing_ini) * 100 if ing_ini > 0 else 0
+            f.write(f"* {aglom_nom}:\n")
+            f.write(f"  - Mediana inicial ({primer_periodo}): ${ing_ini:,.0f}\n".replace(",", "."))
+            f.write(f"  - Mediana final ({ultimo_periodo}): ${ing_fin:,.0f}\n".replace(",", "."))
+            f.write(f"  - Variación real: {variacion:+.1f}%\n\n")
+
+        f.write("="*60 + "\n")
+        f.write("FIN DEL REPORTE\n")
+        f.write("="*60 + "\n")
+
+    print(f"Reporte guardado en {output_txt}")
+
+if __name__ == "__main__":
+    generar_reporte(
+        "data/processed/tasas_mercado_trabajo.pkl",
+        "data/processed/evolucion_ingresos.pkl",
+        "reports/reporte_humano.txt"
+    )============src/report/__init__.py============
+============src/run_pipeline.py============
+# src/run_pipeline.py
+import os
+import sys
+
+src_path = os.path.dirname(os.path.abspath(__file__))
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
+from data.build_dataset import build_dataset
+from features.build_features import build_features
+from analysis.stats_analysis import calcular_tasas_laborales
+from analysis.income_analysis import calcular_ingresos_medianos
+from models.train_model import entrenar_imputar_ingresos
+from visualization.plots_visualization import generar_graficos
+from report.report_analysis import generar_reporte
+
+def verificar_archivos():
+    required = ["data/raw"]
+    for r in required:
+        if not os.path.exists(r):
+            print(f"[ERROR] No se encuentra: {r}")
+            return False
+    return True
+
+def run_pipeline():
+    print("=== INICIANDO PIPELINE DEL TP ===")
+    if not verificar_archivos():
+        sys.exit(1)
+
+    print("\n[1/6] Construyendo dataset crudo...")
+    build_dataset("data/raw", "data/processed")
+
+    print("\n[2/6] Construyendo features y deflactando ingresos...")
+    build_features(
+        "data/processed/serie_individual_raw.pkl",
+        "data/processed/serie_individual_final.pkl"
+    )
+
+    print("\n[3/6] Calculando tasas laborales...")
+    calcular_tasas_laborales(
+        "data/processed/serie_individual_final.pkl",
+        "data/processed/tasas_mercado_trabajo.pkl"
+    )
+
+    print("\n[4/6] Calculando evolución de ingresos...")
+    calcular_ingresos_medianos(
+        "data/processed/serie_individual_final.pkl",
+        "data/processed/evolucion_ingresos.pkl"
+    )
+
+    print("\n[5/6] Entrenando modelo de imputación...")
+    entrenar_imputar_ingresos(
+        "data/processed/serie_individual_final.pkl",
+        "data/processed/serie_individual_imputada.pkl"
+    )
+
+    print("\n[6/6] Generando gráficos y reporte...")
+    generar_graficos(
+        "data/processed/tasas_mercado_trabajo.pkl",
+        "data/processed/serie_individual_final.pkl",
+        "reports/figures"
+    )
+    generar_reporte(
+        "data/processed/tasas_mercado_trabajo.pkl",
+        "data/processed/evolucion_ingresos.pkl",
+        "reports/reporte.txt"
+    )
+
+    print("\n=== PIPELINE COMPLETADO CON ÉXITO ===")
+
+if __name__ == "__main__":
+    run_pipeline()============src/visualization/plots_visualization.py============
+# src/visualization/plots_visualization.py
+import os
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+import numpy as np
+
+def generar_graficos(tasas_pkl, ingresos_pkl, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    sns.set_theme(style="whitegrid")
+
+    # ------------------------------------------------------------------
+    # 1. Graficos de evolucion de tasas laborales
+    # ------------------------------------------------------------------
+    df_tasas = pd.read_pickle(tasas_pkl)
+    mapa_aglom = {33: "GBA", 5: "Gran Mendoza"}
+    df_tasas["Aglomerado"] = df_tasas["AGLOMERADO"].map(mapa_aglom)
+
+    tasas = ["tasa_actividad", "tasa_empleo", "tasa_desocupacion"]
+    titulos = ["Tasa de Actividad", "Tasa de Empleo", "Tasa de Desocupacion"]
+
+    for tasa, titulo in zip(tasas, titulos):
+        plt.figure(figsize=(12, 5))
+        sns.lineplot(
+            data=df_tasas,
+            x="periodo",
+            y=tasa,
+            hue="Aglomerado",
+            marker="o",
+            linewidth=2,
+            palette="Set1"
+        )
+        plt.title(f"Evolucion de la {titulo} (2016-2025)", fontweight="bold")
+        plt.xlabel("Periodo (Anio-Trimestre)")
+        plt.ylabel("Porcentaje (%)")
+        plt.xticks(rotation=45, ha="right", fontsize=9)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f"evolucion_{tasa}.png"), dpi=300)
+        plt.close()
+
+    # ------------------------------------------------------------------
+    # 2. Boxplot de ingresos por nivel educativo y sexo (ultimo anio)
+    # ------------------------------------------------------------------
+    df_ing = pd.read_pickle(ingresos_pkl)
+    ultimo_ano = df_ing["ANO4"].max()
+    df_plot = df_ing[(df_ing["ANO4"] == ultimo_ano) & (df_ing["ingreso_real"] > 0)].copy()
+    df_plot["Sexo"] = df_plot["sexo"]
+    df_plot["Educacion"] = df_plot["nivel_educativo"]
+
+    plt.figure(figsize=(14, 7))
+    sns.boxplot(
+        data=df_plot,
+        x="Educacion",
+        y="ingreso_real",
+        hue="Sexo",
+        palette="pastel",
+        order=[
+            "Sin instruccion",
+            "Primaria incompleta",
+            "Primaria completa",
+            "Secundaria incompleta",
+            "Secundaria completa",
+            "Superior incompleta",
+            "Superior completa"
+        ]
+    )
+    plt.title(f"Distribucion de Ingresos Reales por Nivel Educativo y Sexo ({ultimo_ano})", fontweight="bold")
+    plt.xlabel("Nivel Educativo")
+    plt.ylabel("Ingreso Real (pesos constantes)")
+    plt.xticks(rotation=30, ha="right")
+    plt.yscale("log")
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "boxplot_ingresos_multivariado.png"), dpi=300)
+    plt.close()
+
+    # ------------------------------------------------------------------
+    # 3. Histograma de la distribucion del ingreso real (log) - nuevo
+    # ------------------------------------------------------------------
+    df_ing_pos = df_ing[df_ing["ingreso_real"] > 0].copy()
+    df_ing_pos["log_ingreso"] = np.log(df_ing_pos["ingreso_real"])
+
+    plt.figure(figsize=(10, 6))
+    sns.histplot(
+        data=df_ing_pos,
+        x="log_ingreso",
+        hue="AGLOMERADO",
+        kde=True,
+        bins=40,
+        alpha=0.5,
+        palette="Set2"
+    )
+    plt.title("Distribucion del log(Ingreso Real) por Aglomerado (todos los anios)")
+    plt.xlabel("Log(Ingreso Real)")
+    plt.ylabel("Frecuencia")
+    plt.legend(title="Aglomerado", labels=["GBA", "Gran Mendoza"])
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "histograma_log_ingreso.png"), dpi=300)
+    plt.close()
+
+    # ------------------------------------------------------------------
+    # 4. Grafico de evolucion de la mediana de ingresos reales
+    # ------------------------------------------------------------------
+    # Para esto necesitamos los datos de ingresos medianos por periodo.
+    # Usamos el archivo de evolucion de ingresos generado por income_analysis.py
+    # Pero ese archivo no se pasa como parametro, asi que lo leemos directamente.
+    # Si no existe, se omite este grafico.
+    evol_path = "data/processed/evolucion_ingresos.pkl"
+    if os.path.exists(evol_path):
+        df_evol = pd.read_pickle(evol_path)
+        df_evol["Aglomerado"] = df_evol["AGLOMERADO"].map(mapa_aglom)
+        plt.figure(figsize=(12, 5))
+        sns.lineplot(
+            data=df_evol,
+            x="periodo",
+            y="ingreso_mediano_pond",
+            hue="Aglomerado",
+            marker="o",
+            linewidth=2,
+            palette="Set1"
+        )
+        plt.title("Evolucion del Ingreso Mediano Real (pesos constantes de 2025)")
+        plt.xlabel("Periodo (Anio-Trimestre)")
+        plt.ylabel("Ingreso Mediano (pesos)")
+        plt.xticks(rotation=45, ha="right", fontsize=9)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, "evolucion_ingreso_mediano.png"), dpi=300)
+        plt.close()
+    else:
+        print("No se encontro evolucion_ingresos.pkl, se omite el grafico de evolucion de ingreso mediano.")
+
+    print(f"Graficos guardados en {output_dir}")
+
+if __name__ == "__main__":
+    generar_graficos(
+        "data/processed/tasas_mercado_trabajo.pkl",
+        "data/processed/serie_individual_final.pkl",
+        "reports/figures"
+    )============src/visualization/__init__.py============
+============src/__init__.py============

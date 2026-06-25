@@ -2,129 +2,156 @@
 import os
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import scipy.stats as stats
+from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
+def entrenar_imputar_ingresos(input_pickle, output_pickle, output_figures="reports/figures"):
+    os.makedirs(output_figures, exist_ok=True)
+    df = pd.read_pickle(input_pickle)
 
-def preparar_datos_modelado(path_final):
-    """
-    Levanta el dataset final, filtra la no respuesta y codifica
-    las variables categoricas en formato dummy para la regresion.
-    """
-    df = pd.read_pickle(path_final)
+    # Usar PONDIIO si existe, sino PONDERA
+    pond_col = "PONDIIO" if "PONDIIO" in df.columns else "PONDERA"
 
-    # El modelo se calibra unicamente con quienes declararon ingresos validos
-    df_modelo = df[df["ingreso_real"] > 0].copy()
+    # Solo ocupados con horas trabajadas > 0
+    df_modelo = df[(df["ESTADO"] == 1) & (df["horas_trabajadas"] > 0)].copy()
 
-    # Seleccion de predictores estructurales para el modelo
-    predictores = ["ch04", "ch06", "nivel_ed", "aglomerado"]
-    X = df_modelo[predictores].copy()
+    # Separar con y sin ingreso
+    df_con_ingreso = df_modelo[df_modelo["ingreso_real"] > 0].copy()
+    df_sin_ingreso = df_modelo[df_modelo["ingreso_real"] <= 0].copy()
 
-    # Aplicamos transformacion logaritmica a la variable dependiente
-    # Esto estabiliza la varianza y mejora el rendimiento del R2
-    y = np.log(df_modelo["ingreso_real"])
+    if len(df_con_ingreso) < 100:
+        raise ValueError("No hay suficientes casos con ingreso para entrenar.")
 
-    # Convertimos variables categoricas a dummies de forma explicita
-    X = pd.get_dummies(
-        X, columns=["ch04", "nivel_ed", "aglomerado"], drop_first=True
-    )
+    # Crear variables predictoras
+    df_con_ingreso["edad"] = pd.to_numeric(df_con_ingreso["CH06"], errors="coerce").fillna(0)
+    df_con_ingreso["edad_cuadrado"] = df_con_ingreso["edad"] ** 2
 
-    return X, y
+    # Seleccion de variables
+    X = df_con_ingreso[[
+        "horas_trabajadas",
+        "sexo",
+        "nivel_educativo",
+        "sector_actividad",
+        "calificacion_tarea",
+        "categoria_ocupacional",
+        "registro",
+        "AGLOMERADO",
+        "ANO4",
+        "TRIMESTRE",
+        "edad",
+        "edad_cuadrado"
+    ]].copy()
 
+    X = pd.get_dummies(X, drop_first=True)
+    y = np.log(df_con_ingreso["ingreso_real"])
 
-def entrenar_evaluar_regresion(X, y):
-    """
-    Divide el dataset, entrena el modelo de regresion lineal ordinaria
-    y expone las metricas de rendimiento solicitadas por la catedra.
-    """
-    from sklearn.linear_model import LinearRegression
+    # Division entrenamiento/prueba
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-
+    # Modelo
     model = LinearRegression()
     model.fit(X_train, y_train)
-
-    # Predicciones para evaluar rendimiento general
     y_pred = model.predict(X_test)
 
-    # Calculo de metricas solicitadas en el Objetivo 4
+    # Metricas
     r2 = r2_score(y_test, y_pred)
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
 
-    print("\n================ EVALUACION DEL MODELO ================")
-    print(f"Coeficiente de Determinacion (R2 Score): {round(r2, 4)}")
-    print(f"Error Cuadratico Medio (RMSE en log): {round(rmse, 4)}")
-    print("=======================================================")
+    print("="*60)
+    print("EVALUACION DEL MODELO DE IMPUTACION")
+    print("="*60)
+    print(f"R cuadrado: {r2:.4f}")
+    print(f"RMSE (log): {rmse:.4f}")
+    print("\nCoeficientes (interpretacion en log):")
+    for col, coef in zip(X.columns, model.coef_):
+        print(f"  {col}: {coef:.4f}")
 
-    print("\n================ INTERPRETACION DE COEFICIENTES ================")
-    coef_df = pd.DataFrame(
-        {"Variable": X.columns, "Coeficiente (Beta)": model.coef_}
-    ).round(4)
-    print(coef_df)
-    print(f"Intercepto (Beta 0): {round(model.intercept_, 4)}")
-    print("================================================================")
+    # Graficos de diagnostico
+    plt.figure(figsize=(12, 5))
 
-    return model
+    plt.subplot(1, 3, 1)
+    plt.scatter(y_test, y_pred, alpha=0.3, s=10)
+    min_val = min(y_test.min(), y_pred.min())
+    max_val = max(y_test.max(), y_pred.max())
+    plt.plot([min_val, max_val], [min_val, max_val], 'r--')
+    plt.xlabel('Observado (log)')
+    plt.ylabel('Predicho (log)')
+    plt.title(f'Observados vs Predichos (R2 = {r2:.3f})')
 
+    residuos = y_test - y_pred
+    plt.subplot(1, 3, 2)
+    plt.scatter(y_pred, residuos, alpha=0.3, s=10)
+    plt.axhline(y=0, color='r', linestyle='--')
+    plt.xlabel('Predicho (log)')
+    plt.ylabel('Residuo (log)')
+    plt.title('Residuos vs Predichos')
 
-def imputar_no_respuesta(path_final, model):
-    """
-    Identifica los registros sin declaracion de ingresos, predice su valor
-    mediante el modelo entrenado y los guarda de manera persistente en el dataset.
-    """
-    df = pd.read_pickle(path_final)
+    plt.subplot(1, 3, 3)
+    stats.probplot(residuos, dist="norm", plot=plt)
+    plt.title('Q-Q plot de residuos')
 
-    # Creamos una copia de control para no pisar el ingreso original reportado
-    df["ingreso_imputado"] = df["ingreso_real"]
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_figures, 'diagnostico_regresion.png'), dpi=300)
+    plt.close()
+    print(f"Grafico de diagnostico guardado en {output_figures}/diagnostico_regresion.png")
 
-    # Identificamos las filas que corresponden a la "No Respuesta" (valores <= 0 o vacios)
-    filas_no_respuesta = df["ingreso_real"] <= 0
+    # Imputacion para casos sin ingreso
+    if len(df_sin_ingreso) > 0:
+        df_sin_ingreso["edad"] = pd.to_numeric(df_sin_ingreso["CH06"], errors="coerce").fillna(0)
+        df_sin_ingreso["edad_cuadrado"] = df_sin_ingreso["edad"] ** 2
 
-    if filas_no_respuesta.sum() == 0:
-        print("[ALERTA] No se detectaron registros sin respuesta para imputar.")
-        return df
+        X_sin = df_sin_ingreso[[
+            "horas_trabajadas",
+            "sexo",
+            "nivel_educativo",
+            "sector_actividad",
+            "calificacion_tarea",
+            "categoria_ocupacional",
+            "registro",
+            "AGLOMERADO",
+            "ANO4",
+            "TRIMESTRE",
+            "edad",
+            "edad_cuadrado"
+        ]].copy()
 
-    print(
-        f"\n-> Se detectaron {filas_no_respuesta.sum()} registros con No Respuesta."
-    )
-    print("Generando predicciones de ingresos basadas en variables predictoras...")
+        X_sin = pd.get_dummies(X_sin, drop_first=True)
+        X_sin = X_sin.reindex(columns=X.columns, fill_value=0)
 
-    # Extraemos y codificamos las dummies para el set completo bajo las mismas columnas del modelo
-    predictores = ["ch04", "ch06", "nivel_ed", "aglomerado"]
-    X_completo = pd.get_dummies(
-        df[predictores], columns=["ch04", "nivel_ed", "aglomerado"], drop_first=True
-    )
+        pred_log = model.predict(X_sin)
+        df_sin_ingreso["ingreso_imputado"] = np.exp(pred_log)
 
-    # Filtramos la matriz de diseño unicamente para las filas vacias
-    X_faltantes = X_completo[filas_no_respuesta]
+        # Unir conjuntos
+        df_con_ingreso["ingreso_final"] = df_con_ingreso["ingreso_real"]
+        df_sin_ingreso["ingreso_final"] = df_sin_ingreso["ingreso_imputado"]
+        df_final = pd.concat([df_con_ingreso, df_sin_ingreso], ignore_index=True)
 
-    # El modelo predice en logaritmos; aplicamos np.exp() para pasarlo a pesos reales
-    predicciones_log = model.predict(X_faltantes)
-    predicciones_pesos = np.exp(predicciones_log)
+        # Validacion con PONDIIO: mediana ponderada
+        if pond_col in df_final.columns:
+            df_valid = df_final[df_final["ingreso_final"] > 0].copy()
+            sorted_valid = df_valid.sort_values("ingreso_final")
+            cumsum = sorted_valid[pond_col].cumsum()
+            total = sorted_valid[pond_col].sum()
+            idx = (cumsum >= total/2).idxmax()
+            mediana_ponderada = sorted_valid.loc[idx, "ingreso_final"]
+            print(f"\nMediana ponderada con {pond_col}: ${mediana_ponderada:,.0f}".replace(",", "."))
+        else:
+            print("\nNo se encontro PONDIIO para validacion.")
 
-    # Imputamos los valores estimados unicamente en los baches correspondientes
-    df.loc[filas_no_respuesta, "ingreso_imputado"] = predicciones_pesos
+        df_final.to_pickle(output_pickle)
+        print(f"Imputacion completada. Guardado en {output_pickle}")
+    else:
+        print("No hay casos sin ingreso para imputar.")
 
-    return df
-
+    # Guardar coeficientes
+    coef_df = pd.DataFrame({'variable': X.columns, 'coeficiente': model.coef_})
+    coef_df.to_csv(os.path.join(output_figures, 'coeficientes_modelo.csv'), index=False)
 
 if __name__ == "__main__":
-    final_input = "data/processed/serie_individual_final.pkl"
-
-    if not os.path.exists(final_input):
-        print(f"[ERROR] No se encontro el archivo final en {path_input}")
-    else:
-        print("Iniciando preparacion de matrices para modelado estadistico...")
-        X, y = preparar_datos_modelado(final_input)
-
-        print("Entrenando modelo de regresion lineal multiple...")
-        modelo_ajustado = entrenar_evaluar_regresion(X, y)
-
-        print("Iniciando fase final de Imputacion de la No Respuesta...")
-        df_imputado = imputar_no_respuesta(final_input, modelo_ajustado)
-
-        # Sobreescribimos de forma segura el pickle definitivo incorporando la columna nueva
-        df_imputado.to_pickle(final_input)
-        print(f"-> Proceso completado con éxito. Columna 'ingreso_imputado' persistida.")
+    entrenar_imputar_ingresos(
+        "data/processed/serie_individual_final.pkl",
+        "data/processed/serie_individual_imputada.pkl"
+    )

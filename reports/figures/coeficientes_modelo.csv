@@ -1,0 +1,19 @@
+variable,coeficiente
+horas_trabajadas,0.42443912686745217
+AGLOMERADO,0.0026370925324974283
+ANO4,-0.061509555173838965
+TRIMESTRE,0.11105137790054
+edad,0.06681275511953401
+edad_cuadrado,-0.0006967054608857913
+sexo_Varón,0.5555315447894003
+nivel_educativo_Primaria incompleta,-0.11341451729845523
+nivel_educativo_Secundaria completa,0.38854564497033534
+nivel_educativo_Secundaria incompleta,0.2702510363765585
+nivel_educativo_Sin instrucción,-0.3290446416399409
+nivel_educativo_Superior completa,-0.27611990980327944
+nivel_educativo_Superior incompleta,0.735677488968218
+sector_actividad_Secundario,0.5321521403224857
+sector_actividad_Terciario,0.203941136547537
+calificacion_tarea_Profesional,0.37219010567796884
+categoria_ocupacional_Cuenta propia,-0.45640476105518496
+categoria_ocupacional_Patrón/Empleador,0.23623821046820484

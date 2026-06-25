@@ -1,0 +1,33 @@
+============================================================
+      REPORTE DE EVOLUCIÓN SOCIOECONÓMICA (2016-2025)
+============================================================
+
+1. MERCADO LABORAL
+------------------------------------------------------------
+* Gran Buenos Aires (GBA):
+  - Actividad: 45.6% → 48.1% (subió 2.5 pp)
+  - Empleo: 40.5% → 43.5% (subió 3.0 pp)
+  - Desocupación: 11.2% → 9.5% (bajó 1.7 pp)
+
+* Gran Mendoza:
+  - Actividad: 41.4% → 45.9% (subió 4.4 pp)
+  - Empleo: 39.3% → 43.7% (subió 4.3 pp)
+  - Desocupación: 5.0% → 4.8% (bajó 0.2 pp)
+
+2. EVOLUCIÓN DEL INGRESO MEDIANO (PESOS CONSTANTES)
+------------------------------------------------------------
+(Ingreso mediano ponderado, ajustado por inflación)
+
+* Gran Buenos Aires (GBA):
+  - Mediana inicial (2016-T2): $857.200
+  - Mediana final (2025-T4): $800.000
+  - Variación real: -6.7%
+
+* Gran Mendoza:
+  - Mediana inicial (2016-T2): $1.060.785
+  - Mediana final (2025-T4): $800.000
+  - Variación real: -24.6%
+
+============================================================
+FIN DEL REPORTE
+============================================================
